@@ -24,7 +24,7 @@ const Modal = ({ isOpen, onClose, children }) => {
         {children}
       </div>
 
-      <style jsx>{`
+      <style>{`
         .modal-overlay {
           position: fixed;
           top: 0;

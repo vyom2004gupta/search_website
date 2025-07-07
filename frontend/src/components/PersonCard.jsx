@@ -52,7 +52,7 @@ const PersonCard = ({ person, onClick }) => {
         </div>
       </div>
 
-      <style jsx>{`
+      <style>{`
         .person-card {
           padding: 1.5rem;
           background: rgba(255, 255, 255, 0.03);

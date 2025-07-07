@@ -296,7 +296,7 @@ const UserForm = ({ isOpen, onClose, organizations }) => {
         )}
       </div>
 
-      <style jsx>{`
+      <style>{`
         .form-container {
           color: var(--text-color);
         }

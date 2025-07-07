@@ -11,6 +11,9 @@ from google.oauth2.credentials import Credentials
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from flask_socketio import SocketIO, join_room, leave_room, emit
+from pymongo import MongoClient
+import eventlet
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -42,6 +45,15 @@ SCOPES = [
 SPREADSHEET_ID = '1jWZ6KOfsXWXxtZzrZg2rUEe9qDlOOTsdanWTt3q4rqc'
 RANGE_NAME = 'Sheet1!A2:I'  # Updated to include organization and role
 
+# Flask-SocketIO setup
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+
+# MongoDB setup
+MONGO_URI = os.environ.get('MONGO_URI', 'mongodb://localhost:27017')
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client['people_chat']
+messages_collection = db['messages']
+
 def get_google_sheets_service():
     """Get Google Sheets service object."""
     try:
@@ -68,25 +80,22 @@ def get_google_sheets_service():
         return None
 
 def fetch_people_data():
-    """Fetch data from Google Sheets."""
+    logger.info("fetch_people_data: start")
     try:
         service = get_google_sheets_service()
         if not service:
             logger.error("Failed to create Google Sheets service")
             return []
-
         logger.info(f"Fetching data from spreadsheet {SPREADSHEET_ID}")
         sheet = service.spreadsheets()
         result = sheet.values().get(spreadsheetId=SPREADSHEET_ID,
                                   range=RANGE_NAME).execute()
         values = result.get('values', [])
-
+        logger.info(f"fetch_people_data: got {len(values)} rows")
         if not values:
             logger.warning('No data found in Google Sheet')
             return []
-
         logger.info(f"Successfully fetched {len(values)} rows from Google Sheets")
-        
         # Convert to list of dictionaries
         people = []
         for row in values:
@@ -108,10 +117,8 @@ def fetch_people_data():
             except (ValueError, TypeError) as e:
                 logger.error(f"Error processing row {row}: {str(e)}")
                 continue
-
-        logger.info(f"Successfully processed {len(people)} people records")
+        logger.info(f"fetch_people_data: processed {len(people)} people records")
         return people
-
     except HttpError as err:
         logger.error(f"Google Sheets API error: {str(err)}")
         return []
@@ -141,14 +148,16 @@ def index():
 
 @app.route("/api/organizations")
 def get_organizations():
-    """Get list of unique organizations."""
+    logger.info("HIT /api/organizations")
     try:
         all_people = fetch_people_data()
+        logger.info(f"Fetched {len(all_people)} people")
         organizations = sorted(list(set(
             person['organization'] 
             for person in all_people 
             if person['organization']
         )))
+        logger.info(f"Returning {len(organizations)} organizations")
         return jsonify(organizations)
     except Exception as e:
         logger.error(f"Error fetching organizations: {str(e)}")
@@ -175,9 +184,10 @@ def search_people():
         if q:
             results = [
                 p for p in results
-                if (q in p['name'].lower() or 
-                    (p['organization'] and q in p['organization'].lower()) or
-                    (p['role'] and q in p['role'].lower()))
+                if (q in (p['name'] or '').lower() or 
+                    q in (p['organization'] or '').lower() or
+                    q in (p['role'] or '').lower() or
+                    q in (p['email'] or '').lower())
             ]
             logger.info(f"Filtered to {len(results)} records after text search")
 
@@ -291,6 +301,73 @@ def submit_user():
         logger.error(f"Error submitting user data: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/check_profile_exists')
+def check_profile_exists():
+    """Check if a profile with the given email exists in Google Sheets."""
+    email = request.args.get('email', '').strip().lower()
+    if not email:
+        return jsonify({'error': 'Email is required'}), 400
+    people = fetch_people_data()
+    exists = any(p['email'] and p['email'].strip().lower() == email for p in people)
+    return jsonify({'exists': exists})
+
+@app.route('/api/chat_history')
+def chat_history():
+    """Fetch chat history between two users by their Google Sheet IDs."""
+    user1 = request.args.get('user1')
+    user2 = request.args.get('user2')
+    if not user1 or not user2:
+        return jsonify({'error': 'Both user1 and user2 IDs are required'}), 400
+    # Find messages where (sender==user1 and receiver==user2) or vice versa
+    query = {
+        '$or': [
+            {'sender_id': user1, 'receiver_id': user2},
+            {'sender_id': user2, 'receiver_id': user1}
+        ]
+    }
+    msgs = list(messages_collection.find(query, {'_id': 0}))
+    msgs.sort(key=lambda x: x.get('timestamp', ''))
+    return jsonify(msgs)
+
+@app.route("/api/ping")
+def ping():
+    return jsonify({"status": "ok"})
+
+# Socket.IO events
+@socketio.on('join_room')
+def handle_join_room(data):
+    user1 = data.get('user1')
+    user2 = data.get('user2')
+    if not user1 or not user2:
+        logger.warning('join_room: missing user1 or user2')
+        return
+    room = ':'.join(sorted([user1, user2]))
+    logger.info(f'User joining room: {room} (user1={user1}, user2={user2})')
+    join_room(room)
+    emit('joined_room', {'room': room})
+
+@socketio.on('send_message')
+def handle_send_message(data):
+    sender_id = data.get('sender_id')
+    receiver_id = data.get('receiver_id')
+    message = data.get('message')
+    timestamp = data.get('timestamp')
+    logger.info(f'Received message: sender={sender_id}, receiver={receiver_id}, message={message}, timestamp={timestamp}')
+    if not sender_id or not receiver_id or not message:
+        logger.warning('send_message: missing sender_id, receiver_id, or message')
+        return
+    room = ':'.join(sorted([sender_id, receiver_id]))
+    msg_doc = {
+        'sender_id': sender_id,
+        'receiver_id': receiver_id,
+        'message': message,
+        'timestamp': timestamp or datetime.utcnow().isoformat()
+    }
+    messages_collection.insert_one(msg_doc)
+    msg_doc.pop('_id', None)  # Remove ObjectId before emitting
+    logger.info(f'Message saved to MongoDB and emitting to room {room}: {msg_doc}')
+    emit('receive_message', msg_doc, room=room)
+
 # Route for static files handled automatically via static_folder argument
 
 # -------------------------------------------------
@@ -300,4 +377,4 @@ def submit_user():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5002))
     print(f"Starting Flask server on port {port}")
-    app.run(host="0.0.0.0", port=port, debug=True) 
+    socketio.run(app, host="0.0.0.0", port=port, debug=True) 

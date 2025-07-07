@@ -1,6 +1,142 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
+import { useUser } from "@clerk/clerk-react";
+import { useState } from "react";
+import io from "socket.io-client";
+import { useNavigate } from "react-router-dom";
+
+const API_BASE_URL = 'http://localhost:5002';
+
+const ChatModal = ({ open, onClose, person }) => {
+  const { user } = useUser();
+  const [myProfile, setMyProfile] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(true);
+  const socketRef = useRef(null);
+  const messagesEndRef = useRef(null);
+
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages]);
+
+  // Fetch my profile (from Google Sheets) to get my ID
+  useEffect(() => {
+    if (!user?.primaryEmailAddress?.emailAddress) return;
+    const fetchProfile = async () => {
+      const res = await fetch(`${API_BASE_URL}/api/search?q=${encodeURIComponent(user.primaryEmailAddress.emailAddress)}`);
+      const data = await res.json();
+      // Find exact email match
+      const profile = data.find(p => p.email && p.email.trim().toLowerCase() === user.primaryEmailAddress.emailAddress.trim().toLowerCase());
+      setMyProfile(profile || null);
+    };
+    fetchProfile();
+  }, [user]);
+
+  // Fetch chat history and connect to Socket.IO
+  useEffect(() => {
+    if (!open || !myProfile || !person?.id) return;
+    setLoading(true);
+    // Fetch chat history
+    const fetchHistory = async () => {
+      const res = await fetch(`${API_BASE_URL}/api/chat_history?user1=${myProfile.id}&user2=${person.id}`);
+      const data = await res.json();
+      setMessages(data || []);
+      setLoading(false);
+    };
+    fetchHistory();
+    // Connect to Socket.IO
+    socketRef.current = io(API_BASE_URL);
+    socketRef.current.emit('join_room', { user1: myProfile.id, user2: person.id });
+    socketRef.current.on('receive_message', (msg) => {
+      // Only add if relevant to this chat
+      if ((msg.sender_id === myProfile.id && msg.receiver_id === person.id) || (msg.sender_id === person.id && msg.receiver_id === myProfile.id)) {
+        setMessages(prev => [...prev, msg]);
+      }
+    });
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    };
+  }, [open, myProfile, person]);
+
+  const handleSend = () => {
+    if (!input.trim() || !myProfile || !person?.id) return;
+    const msg = {
+      sender_id: myProfile.id,
+      receiver_id: person.id,
+      message: input.trim(),
+      timestamp: new Date().toISOString(),
+    };
+    socketRef.current.emit('send_message', msg);
+    setInput("");
+  };
+
+  if (!open) return null;
+  return (
+    <div className="chat-modal-overlay">
+      <div className="chat-modal">
+        <h3>Chat with {person.name}</h3>
+        <div className="chat-history" style={{ maxHeight: 300, overflowY: 'auto', marginBottom: 16, background: '#222', padding: 8, borderRadius: 8 }}>
+          {loading ? <div>Loading...</div> :
+            messages.length === 0 ? <div>No messages yet.</div> :
+            messages.map((msg, idx) => (
+              <div key={idx} style={{ textAlign: msg.sender_id === myProfile?.id ? 'right' : 'left', margin: '8px 0' }}>
+                <span style={{ background: msg.sender_id === myProfile?.id ? '#00c6ff' : '#444', color: '#fff', padding: '6px 12px', borderRadius: 16, display: 'inline-block' }}>{msg.message}</span>
+                <div style={{ fontSize: 10, color: '#aaa' }}>{new Date(msg.timestamp).toLocaleString()}</div>
+              </div>
+            ))
+          }
+          <div ref={messagesEndRef} />
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            type="text"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleSend(); }}
+            placeholder="Type a message..."
+            style={{ flex: 1, padding: 8, borderRadius: 8, border: '1px solid #333', background: '#181a1b', color: '#fff' }}
+            disabled={!myProfile}
+          />
+          <button onClick={handleSend} disabled={!input.trim() || !myProfile}>Send</button>
+        </div>
+        <button onClick={onClose} style={{ marginTop: 16 }}>Close</button>
+      </div>
+      <style>{`
+        .chat-modal-overlay {
+          position: fixed;
+          top: 0; left: 0; right: 0; bottom: 0;
+          background: rgba(0,0,0,0.6);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+        }
+        .chat-modal {
+          background: #181a1b;
+          color: #fff;
+          padding: 2rem;
+          border-radius: 16px;
+          min-width: 320px;
+          max-width: 90vw;
+        }
+      `}</style>
+    </div>
+  );
+};
 
 const DetailedView = ({ person }) => {
+  const { user, isSignedIn } = useUser();
+  const [showChatModal, setShowChatModal] = useState(false);
+  const [checkingProfile, setCheckingProfile] = useState(false);
+  const [profileExists, setProfileExists] = useState(null);
+  const [showProfilePrompt, setShowProfilePrompt] = useState(false);
+  const navigate = useNavigate();
+
   const shouldShowPhone = person.phone && !person.is_phone_private;
   const phoneDisplay = shouldShowPhone ? (
     <div className="info-item">
@@ -20,6 +156,30 @@ const DetailedView = ({ person }) => {
       </span>
     </div>
   ) : null;
+
+  const handleChatClick = async () => {
+    if (!isSignedIn || !user?.primaryEmailAddress?.emailAddress) {
+      alert("You must be signed in to chat.");
+      return;
+    }
+    setCheckingProfile(true);
+    setShowProfilePrompt(false);
+    try {
+      const email = user.primaryEmailAddress.emailAddress;
+      const res = await fetch(`${API_BASE_URL}/api/check_profile_exists?email=${encodeURIComponent(email)}`);
+      const data = await res.json();
+      if (data.exists) {
+        // Navigate to chat page with this person's ID
+        navigate(`/chat/${person.id}`);
+      } else {
+        setShowProfilePrompt(true);
+      }
+    } catch (err) {
+      alert("Error checking your profile. Please try again.");
+    } finally {
+      setCheckingProfile(false);
+    }
+  };
 
   return (
     <div className="detailed-view">
@@ -81,7 +241,27 @@ const DetailedView = ({ person }) => {
         )}
       </div>
 
-      <style jsx>{`
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
+        <button className="chat-button" onClick={handleChatClick} disabled={checkingProfile}>
+          {checkingProfile ? 'Checking...' : 'Chat'}
+        </button>
+      </div>
+      {showProfilePrompt && (
+        <div className="profile-prompt">
+          <p>You need to add your details before you can chat. Please use the button below.</p>
+          <button className="add-details-btn" onClick={() => navigate('/')}>Add Your Details</button>
+          <style>{`
+            .add-details-btn { background: #00c6ff; color: #fff; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; font-size: 1rem; margin-top: 1rem; cursor: pointer; }
+            .add-details-btn:hover { background: #0072ff; }
+          `}</style>
+        </div>
+      )}
+
+      {showChatModal && (
+        <ChatModal open={showChatModal} onClose={() => setShowChatModal(false)} person={person} />
+      )}
+
+      <style>{`
         .detailed-view {
           color: var(--text-color);
           max-width: 800px;

@@ -206,7 +206,7 @@ const LandingPage = ({ onStartSearch }) => {
         </motion.div>
       </footer>
 
-      <style jsx>{`
+      <style>{`
         .nav-buttons {
           display: flex;
           gap: 1rem;
