@@ -100,3 +100,20 @@ Longitude: -77.03656
 ## Deployment
 
 Because this is a standard Flask + React app, you can deploy it on any platform supporting Python and Node.js (Fly.io, Render, Heroku, etc.) or containerize it with Docker. 
+
+## Screenshots
+
+Homepage
+<img src="Screenshots/Home.png" alt="Homepage" width="700">
+Search 
+<img src="Screenshots/List.png" alt="List" width="700">
+Search Results 
+<img src="Screenshots/Namesshow.png" alt="Names" width="700">
+Search Nearby
+<img src="Screenshots/Locdetect.png" alt="Loc" width="700">
+People Nearby Results
+<img src="Screenshots/Nearby.png" alt="Nearby" width="700">
+Add Details
+<img src="Screenshots/Adddetails.png" alt="Adddetails" width="700">
+Real Time Chatting happening between two users => Both users on different windows of browser
+<img src="Screenshots/Chat.png" alt="chat" width="700">
