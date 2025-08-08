@@ -103,17 +103,17 @@ Because this is a standard Flask + React app, you can deploy it on any platform 
 
 ## Screenshots
 
-Homepage
-<img src="Screenshots/Home.png" alt="Homepage" width="700">
-Search 
-<img src="Screenshots/List.png" alt="List" width="700">
-Search Results 
-<img src="Screenshots/Namesshow.png" alt="Names" width="700">
-Search Nearby
-<img src="Screenshots/Locdetect.png" alt="Loc" width="700">
-People Nearby Results
-<img src="Screenshots/Nearby.png" alt="Nearby" width="700">
-Add Details
-<img src="Screenshots/Adddetails.png" alt="Adddetails" width="700">
-Real Time Chatting happening between two users => Both users on different windows of browser
-<img src="Screenshots/Chat.png" alt="chat" width="700">
+### Homepage
+![Homepage](Screenshots/Home.png)
+### Search
+![Search](Screenshots/List.png)
+### Search Results 
+![Search res](Screenshots/Nameshow.png)
+### Finding Nearby People
+![Search near](Screenshots/Locdetect.png)
+### People Nearby Results
+![near res](Screenshots/Nearby.png)
+### Add Details
+![adddetail](Screenshots/Adddetails.png)
+### Real Time Chatting happening between two users => Both users on different windows of browser
+![chat](Screenshots/Chat.png)
